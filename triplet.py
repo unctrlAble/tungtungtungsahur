@@ -8,7 +8,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 # Target custom emoji ID and optional custom banner image URL
-EMOJI_ID = 1531194232268652585
+EMOJI_ID = 0 # Upload your emoji
 IMAGE_URL = "https://italian-brainrot.org/images/characters/tung-tung-tung-sahur.webp"  # Replace with direct image URL if desired
 
 intents = discord.Intents.default()
