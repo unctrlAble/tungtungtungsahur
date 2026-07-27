@@ -1,15 +1,16 @@
 import os
 import discord
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# Load .env file
+# Load .env file (reads DISCORD_TOKEN for single-bot deployment)
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-# Target custom emoji ID and optional custom banner image URL
-EMOJI_ID = 0 # Upload your emoji
-IMAGE_URL = "https://italian-brainrot.org/images/characters/tung-tung-tung-sahur.webp"  # Replace with direct image URL if desired
+# Custom Emoji ID and Banner Image URL
+EMOJI_ID = int(os.getenv("EMOJI_ID", "0"))
+IMAGE_URL = os.getenv("IMAGE_URL", "YOUR_IMAGE_URL_HERE")
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -17,26 +18,16 @@ intents.members = True
 intents.reactions = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="ttt.", intents=intents)
 
 
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user}")
-    try:
-        synced = await bot.tree.sync()
-        print(f"synced {len(synced)} commands")
-    except Exception as e:
-        print(e)
-
-
-@bot.event
-async def on_guild_join(guild):
-    # 1. Clean up any leftover #verify channel if re-invited
+async def setup_verification(guild: discord.Guild):
+    """Sets up roles, hides existing channels, and creates the #verify channel."""
+    # 1. Clean up any existing #verify channel first
     existing_channel = discord.utils.get(guild.text_channels, name="verify")
     if existing_channel:
         try:
-            await existing_channel.delete(reason="Cleaning up old verify channel")
+            await existing_channel.delete(reason="Re-setting up verify channel")
         except discord.Forbidden:
             pass
 
@@ -48,7 +39,7 @@ async def on_guild_join(guild):
         name="Unverified"
     )
 
-    # Assign Unverified role to existing non-bot members without Verified
+    # Assign Unverified role to non-bot members missing Verified
     for member in guild.members:
         if not member.bot and verified_role not in member.roles:
             try:
@@ -56,7 +47,7 @@ async def on_guild_join(guild):
             except discord.Forbidden:
                 pass
 
-    # 3. Lock pre-existing channels so unverified members cannot see them
+    # 3. Restrict pre-existing channels for @everyone
     for ch in guild.channels:
         try:
             await ch.set_permissions(guild.default_role, view_channel=False)
@@ -69,10 +60,10 @@ async def on_guild_join(guild):
         guild.default_role: discord.PermissionOverwrite(
             view_channel=True,
             send_messages=False,
-            add_reactions=False,  # Prevents users from adding new/different emojis
+            add_reactions=False,
         ),
         verified_role: discord.PermissionOverwrite(
-            view_channel=False  # Hides #verify once they get verified
+            view_channel=False
         ),
         guild.me: discord.PermissionOverwrite(
             view_channel=True, send_messages=True, add_reactions=True
@@ -93,6 +84,103 @@ async def on_guild_join(guild):
         await msg.add_reaction(discord.PartialEmoji(name="tung_tung_sahur", id=EMOJI_ID))
 
 
+async def teardown_verification(guild: discord.Guild):
+    """Deletes #verify, removes roles, and resets @everyone channel view permissions back to default (/)."""
+    # 1. Delete #verify channel
+    verify_channel = discord.utils.get(guild.text_channels, name="verify")
+    if verify_channel:
+        try:
+            await verify_channel.delete(reason="Verification disabled")
+        except discord.Forbidden:
+            pass
+
+    # 2. Reset channel permissions (@everyone and Verified overrides cleared back to '/')
+    verified_role = discord.utils.get(guild.roles, name="Verified")
+    for ch in guild.channels:
+        try:
+            await ch.set_permissions(guild.default_role, view_channel=None)
+            if verified_role:
+                await ch.set_permissions(verified_role, overwrite=None)
+        except discord.Forbidden:
+            pass
+
+    # 3. Delete Verified and Unverified roles
+    unverified_role = discord.utils.get(guild.roles, name="Unverified")
+    if unverified_role:
+        try:
+            await unverified_role.delete()
+        except discord.Forbidden:
+            pass
+
+    if verified_role:
+        try:
+            await verified_role.delete()
+        except discord.Forbidden:
+            pass
+
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash commands")
+    except Exception as e:
+        print(e)
+
+
+@bot.event
+async def on_guild_join(guild):
+    await setup_verification(guild)
+
+
+@bot.event
+async def on_message(message):
+    if message.author.bot or not message.guild:
+        return
+
+    # Check if the bot was mentioned/pinged specifically
+    if bot.user in message.mentions and len(message.content.strip().split()) == 1:
+        await message.channel.send("The prefix is ttt.")
+
+    await bot.process_commands(message)
+
+
+# =========================================================
+# SLASH COMMAND GROUP: /verification enable | disable
+# =========================================================
+class VerificationGroup(app_commands.Group):
+    pass
+
+verification_group = VerificationGroup(name="verification", description="Manage server verification system")
+
+
+@verification_group.command(name="enable", description="Enable the verification system and create #verify")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def enable_verification(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await setup_verification(interaction.guild)
+    await interaction.followup.send("✅ Verification system enabled! `#verify` channel created.", ephemeral=True)
+
+
+@verification_group.command(name="disable", description="Disable verification, delete #verify, and restore default channel permissions")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def disable_verification(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await teardown_verification(interaction.guild)
+    await interaction.followup.send("✅ Verification system disabled. `#verify` channel, roles, and channel restrictions removed.", ephemeral=True)
+
+
+@enable_verification.error
+@disable_verification.error
+async def verification_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("❌ You need **Manage Server** or **Administrator** permissions to use this command.", ephemeral=True)
+
+
+bot.tree.add_command(verification_group)
+
+
 @bot.event
 async def on_member_join(member):
     if not member.bot:
@@ -106,7 +194,6 @@ async def on_member_join(member):
 
 @bot.event
 async def on_raw_reaction_add(payload):
-    # Ignore bot's own reactions
     if payload.user_id == bot.user.id:
         return
 
@@ -118,7 +205,7 @@ async def on_raw_reaction_add(payload):
     if not channel or channel.name != "verify":
         return
 
-    # Automatically remove any reaction that isn't the verification emoji
+    # Auto-remove unauthorized reactions
     if payload.emoji.id != EMOJI_ID:
         try:
             msg = await channel.fetch_message(payload.message_id)
@@ -127,7 +214,6 @@ async def on_raw_reaction_add(payload):
             pass
         return
 
-    # Process role assignment for valid reaction
     member = guild.get_member(payload.user_id)
     if not member or member.bot:
         return
