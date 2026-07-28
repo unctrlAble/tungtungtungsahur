@@ -8,7 +8,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 EMOJI_ID = int(os.getenv("EMOJI_ID", "0"))
-IMAGE_URL = os.getenv("IMAGE_URL", "YOUR_IMAGE_URL_HERE")
+IMAGE_URL = os.getenv("IMAGE_URL", "https://italian-brainrot.org/images/characters/tung-tung-tung-sahur.webp")
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -20,7 +20,8 @@ bot = commands.Bot(command_prefix="ttt.", intents=intents)
 
 
 async def setup_verification(guild: discord.Guild):
-    """Configures Unverified & Verified role permissions directly without touching existing channels."""
+    """Configures Unverified & Verified roles and restricts Unverified users to ONLY see #verify."""
+    # 1. Clean up existing #verify channel
     existing_channel = discord.utils.get(guild.text_channels, name="verify")
     if existing_channel:
         try:
@@ -28,6 +29,7 @@ async def setup_verification(guild: discord.Guild):
         except discord.Forbidden:
             pass
 
+    # 2. Get or create Verified role
     verified_role = discord.utils.get(guild.roles, name="Verified")
     if not verified_role:
         verified_role = await guild.create_role(
@@ -45,6 +47,7 @@ async def setup_verification(guild: discord.Guild):
             reason="Created for Triplet verification system",
         )
 
+    # 3. Get or create Unverified role
     unverified_role = discord.utils.get(guild.roles, name="Unverified")
     if not unverified_role:
         unverified_role = await guild.create_role(
@@ -55,14 +58,20 @@ async def setup_verification(guild: discord.Guild):
             ),
             reason="Created for Triplet verification system",
         )
-    else:
-        try:
-            await unverified_role.edit(
-                permissions=discord.Permissions(view_channel=False, send_messages=False)
-            )
-        except discord.Forbidden:
-            pass
 
+    # 4. Hide all existing channels from Unverified members
+    for channel in guild.channels:
+        if channel.name != "verify":
+            try:
+                await channel.set_permissions(
+                    unverified_role,
+                    view_channel=False,
+                    reason="Hiding channels from Unverified role",
+                )
+            except discord.Forbidden:
+                print(f"Lacking permissions to modify channel {channel.name}")
+
+    # 5. Assign Unverified role to non-bot members missing Verified
     for member in guild.members:
         if not member.bot and verified_role not in member.roles:
             try:
@@ -70,6 +79,7 @@ async def setup_verification(guild: discord.Guild):
             except discord.Forbidden as e:
                 print(f"Failed to give Unverified role to {member}: {e}")
 
+    # 6. Create the #verify channel ONLY visible to Unverified
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
         unverified_role: discord.PermissionOverwrite(
@@ -208,6 +218,21 @@ async def on_member_join(member):
                 await member.add_roles(unverified_role)
             except discord.Forbidden as e:
                 print(f"Could not give Unverified role to {member}: {e}")
+
+
+@bot.event
+async def on_guild_channel_create(channel):
+    """Automatically hide newly created channels from Unverified users."""
+    unverified_role = discord.utils.get(channel.guild.roles, name="Unverified")
+    if unverified_role and channel.name != "verify":
+        try:
+            await channel.set_permissions(
+                unverified_role,
+                view_channel=False,
+                reason="Hiding new channel from Unverified role",
+            )
+        except discord.Forbidden:
+            pass
 
 
 @bot.event
