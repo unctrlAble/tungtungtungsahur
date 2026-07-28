@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-EMOJI_ID = int(os.getenv("EMOJI_ID", "1531194232268652585"))
+EMOJI_ID = int(os.getenv("EMOJI_ID", "0"))
 IMAGE_URL = os.getenv("IMAGE_URL", "YOUR_IMAGE_URL_HERE")
 
 intents = discord.Intents.default()
