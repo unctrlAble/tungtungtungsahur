@@ -34,7 +34,11 @@ async def perform_verification(member: discord.Member) -> bool:
         if verified_role and verified_role not in member.roles:
             await member.add_roles(verified_role)
         return True
-    except discord.Forbidden:
+    except discord.Forbidden as e:
+        print(f"[Error] Lacking permissions to verify {member}: {e}")
+        return False
+    except Exception as e:
+        print(f"[Error] Failed to verify {member}: {e}")
         return False
 
 
@@ -50,7 +54,11 @@ async def perform_unverification(member: discord.Member) -> bool:
         if unverified_role and unverified_role not in member.roles:
             await member.add_roles(unverified_role)
         return True
-    except discord.Forbidden:
+    except discord.Forbidden as e:
+        print(f"[Error] Lacking permissions to unverify {member}: {e}")
+        return False
+    except Exception as e:
+        print(f"[Error] Failed to unverify {member}: {e}")
         return False
 
 
@@ -114,8 +122,8 @@ async def setup_verification(guild: discord.Guild):
         unverified_role: discord.PermissionOverwrite(
             view_channel=True,
             send_messages=False,
-            read_message_history=True,  # Unverified users can read message history
-            add_reactions=True,
+            read_message_history=True,  # Allows reading message history
+            add_reactions=False,        # Denies adding NEW reactions to messages
         ),
         verified_role: discord.PermissionOverwrite(view_channel=False),
         guild.me: discord.PermissionOverwrite(
@@ -133,7 +141,8 @@ async def setup_verification(guild: discord.Guild):
 
     try:
         await msg.add_reaction(f"<:tung_tung_sahur:{EMOJI_ID}>")
-    except discord.HTTPException:
+    except discord.HTTPException as e:
+        print(f"[Warning] Custom emoji add failed, using fallback ID: {e}")
         await msg.add_reaction(discord.PartialEmoji(name="tung_tung_sahur", id=EMOJI_ID))
 
 
@@ -168,7 +177,7 @@ async def on_ready():
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} slash commands")
     except Exception as e:
-        print(e)
+        print(f"[Error] Slash command sync failed: {e}")
 
 
 @bot.event
@@ -221,7 +230,7 @@ async def prefix_verify(ctx, member: discord.Member):
     if success:
         await ctx.send(f"✅ Automatically verified {member.mention} and removed the Unverified role.")
     else:
-        await ctx.send(f"❌ Failed to verify {member.mention}. Check role hierarchy permissions.")
+        await ctx.send(f"❌ Failed to verify {member.mention}. Make sure the bot's role is HIGHER than Unverified/Verified in Server Settings > Roles.")
 
 
 @bot.command(name="unverify")
@@ -232,7 +241,7 @@ async def prefix_unverify(ctx, member: discord.Member):
     if success:
         await ctx.send(f"✅ Unverified {member.mention} and re-added the Unverified role.")
     else:
-        await ctx.send(f"❌ Failed to unverify {member.mention}. Check role hierarchy permissions.")
+        await ctx.send(f"❌ Failed to unverify {member.mention}. Make sure the bot's role is HIGHER than Unverified/Verified in Server Settings > Roles.")
 
 
 # =========================================================
@@ -260,7 +269,7 @@ async def slash_verify(interaction: discord.Interaction, member: discord.Member)
     if success:
         await interaction.followup.send(f"✅ Automatically verified {member.mention} and removed the Unverified role.", ephemeral=True)
     else:
-        await interaction.followup.send(f"❌ Failed to verify {member.mention}. Check bot role hierarchy permissions.", ephemeral=True)
+        await interaction.followup.send(f"❌ Failed to verify {member.mention}. Make sure the bot's role is HIGHER than Unverified/Verified in Server Settings > Roles.", ephemeral=True)
 
 
 @bot.tree.command(name="unverify", description="Remove verification from a member and add Unverified role")
@@ -271,7 +280,7 @@ async def slash_unverify(interaction: discord.Interaction, member: discord.Membe
     if success:
         await interaction.followup.send(f"✅ Unverified {member.mention} and re-added the Unverified role.", ephemeral=True)
     else:
-        await interaction.followup.send(f"❌ Failed to unverify {member.mention}. Check bot role hierarchy permissions.", ephemeral=True)
+        await interaction.followup.send(f"❌ Failed to unverify {member.mention}. Make sure the bot's role is HIGHER than Unverified/Verified in Server Settings > Roles.", ephemeral=True)
 
 
 @slash_verify.error
@@ -359,27 +368,14 @@ async def on_raw_reaction_add(payload):
     if not channel or channel.name != "verify":
         return
 
-    # Check if the reaction matches the defined verification emoji ID
-    is_valid_emoji = False
-    if payload.emoji.is_customemoji():
-        if payload.emoji.id == EMOJI_ID:
-            is_valid_emoji = True
-    elif EMOJI_ID == 0:  # Fallback if using standard emojis
-        is_valid_emoji = True
-
-    # If user reacted with an unauthorized emoji, remove it
-    if not is_valid_emoji:
+    # User reacted to the message in #verify -> Verify them
+    member = payload.member
+    if not member:
         try:
-            msg = await channel.fetch_message(payload.message_id)
-            user = guild.get_member(payload.user_id)
-            if user:
-                await msg.remove_reaction(payload.emoji, user)
-        except discord.Forbidden:
-            pass
-        return
+            member = await guild.fetch_member(payload.user_id)
+        except discord.HTTPException:
+            return
 
-    # User reacted with valid verification emoji -> Verify them
-    member = guild.get_member(payload.user_id)
     if not member or member.bot:
         return
 
