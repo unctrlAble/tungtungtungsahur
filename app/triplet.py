@@ -8,7 +8,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 EMOJI_ID = int(os.getenv("EMOJI_ID", "0"))
-IMAGE_URL = os.getenv("IMAGE_URL", "YOUR_IMAGE_URL_HERE")
+IMAGE_URL = os.getenv("IMAGE_URL", "-")
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -16,8 +16,10 @@ intents.members = True
 intents.reactions = True
 intents.message_content = True
 
-# Match catpillr: allow spaces after prefix
 bot = commands.Bot(command_prefix="ttt.", strip_after_prefix=True, intents=intents)
+
+# Remove default built-in help command to prevent registration collision crash
+bot.remove_command("help")
 
 
 async def setup_verification(guild: discord.Guild):
@@ -80,7 +82,7 @@ async def setup_verification(guild: discord.Guild):
         unverified_role: discord.PermissionOverwrite(
             view_channel=True,
             send_messages=False,
-            add_reactions=False,
+            add_reactions=True,  # Allow unverified users to add reactions in #verify
         ),
         verified_role: discord.PermissionOverwrite(view_channel=False),
         guild.me: discord.PermissionOverwrite(
@@ -252,6 +254,7 @@ async def on_guild_channel_create(channel):
 
 @bot.event
 async def on_raw_reaction_add(payload):
+    # Ignore bot reactions
     if payload.user_id == bot.user.id:
         return
 
@@ -263,14 +266,26 @@ async def on_raw_reaction_add(payload):
     if not channel or channel.name != "verify":
         return
 
-    if payload.emoji.id != EMOJI_ID:
+    # Check if the reaction matches the defined verification emoji ID
+    is_valid_emoji = False
+    if payload.emoji.is_custom_emoji():
+        if payload.emoji.id == EMOJI_ID:
+            is_valid_emoji = True
+    elif EMOJI_ID == 0:  # Fallback if using standard emojis
+        is_valid_emoji = True
+
+    # If user reacted with an unauthorized emoji, remove it
+    if not is_valid_emoji:
         try:
             msg = await channel.fetch_message(payload.message_id)
-            await msg.remove_reaction(payload.emoji, discord.Object(id=payload.user_id))
+            user = guild.get_member(payload.user_id)
+            if user:
+                await msg.remove_reaction(payload.emoji, user)
         except discord.Forbidden:
             pass
         return
 
+    # User reacted with valid verification emoji -> Verify them
     member = guild.get_member(payload.user_id)
     if not member or member.bot:
         return
