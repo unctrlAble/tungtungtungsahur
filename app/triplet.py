@@ -82,11 +82,15 @@ async def setup_verification(guild: discord.Guild):
         unverified_role: discord.PermissionOverwrite(
             view_channel=True,
             send_messages=False,
-            add_reactions=True,  # Allow unverified users to add reactions in #verify
+            add_reactions=True,
+            read_message_history=True,  # Allows unverified users to see the verify message & image
         ),
         verified_role: discord.PermissionOverwrite(view_channel=False),
         guild.me: discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, add_reactions=True
+            view_channel=True,
+            send_messages=True,
+            add_reactions=True,
+            read_message_history=True,
         ),
     }
 
