@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-EMOJI_ID = int(os.getenv("EMOJI_ID", "0"))
+EMOJI_ID = int(os.getenv("EMOJI_ID", "YOUR_EMOJI_ID_HERE"))
 IMAGE_URL = os.getenv("IMAGE_URL", "YOUR_IMAGE_URL_HERE")
 
 intents = discord.Intents.default()
@@ -33,6 +33,22 @@ async def perform_verification(member: discord.Member) -> bool:
             await member.remove_roles(unverified_role)
         if verified_role and verified_role not in member.roles:
             await member.add_roles(verified_role)
+        return True
+    except discord.Forbidden:
+        return False
+
+
+async def perform_unverification(member: discord.Member) -> bool:
+    """Helper function to remove Verified and add Unverified role."""
+    guild = member.guild
+    verified_role = discord.utils.get(guild.roles, name="Verified")
+    unverified_role = discord.utils.get(guild.roles, name="Unverified")
+
+    try:
+        if verified_role and verified_role in member.roles:
+            await member.remove_roles(verified_role)
+        if unverified_role and unverified_role not in member.roles:
+            await member.add_roles(unverified_role)
         return True
     except discord.Forbidden:
         return False
@@ -98,7 +114,7 @@ async def setup_verification(guild: discord.Guild):
         unverified_role: discord.PermissionOverwrite(
             view_channel=True,
             send_messages=False,
-            read_message_history=True,  # Allows unverified role to read message history
+            read_message_history=True,  # Unverified users can read message history
             add_reactions=True,
         ),
         verified_role: discord.PermissionOverwrite(view_channel=False),
@@ -176,16 +192,16 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return
     elif isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You don't have permission to run this command.")
+        await ctx.send("You need manage roles perm for this")
         return
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ Please mention a member to verify. Usage: `ttt.verify @member`")
+        await ctx.send("❌ Please mention a member. Example: `ttt.verify @member`")
         return
     raise error
 
 
 # =========================================================
-# PREFIX COMMANDS (ttt.help, ttt.prefix, ttt.verify)
+# PREFIX COMMANDS (ttt.help, ttt.prefix, ttt.verify, ttt.unverify)
 # =========================================================
 @bot.command(name="help")
 async def prefix_help(ctx):
@@ -200,16 +216,27 @@ async def prefix_prefix(ctx):
 @bot.command(name="verify")
 @commands.has_permissions(manage_roles=True)
 async def prefix_verify(ctx, member: discord.Member):
-    """Prefix command to manually verify a user: ttt.verify @member"""
+    """Prefix command: ttt.verify @member"""
     success = await perform_verification(member)
     if success:
         await ctx.send(f"✅ Automatically verified {member.mention} and removed the Unverified role.")
     else:
-        await ctx.send(f"❌ Failed to verify {member.mention}. Check bot permissions/role hierarchy.")
+        await ctx.send(f"❌ Failed to verify {member.mention}. Check role hierarchy permissions.")
+
+
+@bot.command(name="unverify")
+@commands.has_permissions(manage_roles=True)
+async def prefix_unverify(ctx, member: discord.Member):
+    """Prefix command: ttt.unverify @member"""
+    success = await perform_unverification(member)
+    if success:
+        await ctx.send(f"✅ Unverified {member.mention} and re-added the Unverified role.")
+    else:
+        await ctx.send(f"❌ Failed to unverify {member.mention}. Check role hierarchy permissions.")
 
 
 # =========================================================
-# GENERAL SLASH COMMANDS (/help, /prefix, /verify)
+# GENERAL SLASH COMMANDS (/help, /prefix, /verify, /unverify)
 # =========================================================
 @bot.tree.command(name="help", description="get help and support server link")
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -228,18 +255,33 @@ async def slash_prefix(interaction: discord.Interaction):
 @bot.tree.command(name="verify", description="Manually verify a member and remove Unverified role")
 @app_commands.checks.has_permissions(manage_roles=True)
 async def slash_verify(interaction: discord.Interaction, member: discord.Member):
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
     success = await perform_verification(member)
     if success:
-        await interaction.followup.send(f"✅ Automatically verified {member.mention} and removed the Unverified role.")
+        await interaction.followup.send(f"✅ Automatically verified {member.mention} and removed the Unverified role.", ephemeral=True)
     else:
-        await interaction.followup.send(f"❌ Failed to verify {member.mention}. Check bot permissions/role hierarchy.")
+        await interaction.followup.send(f"❌ Failed to verify {member.mention}. Check bot role hierarchy permissions.", ephemeral=True)
+
+
+@bot.tree.command(name="unverify", description="Remove verification from a member and add Unverified role")
+@app_commands.checks.has_permissions(manage_roles=True)
+async def slash_unverify(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.defer(ephemeral=True)
+    success = await perform_unverification(member)
+    if success:
+        await interaction.followup.send(f"✅ Unverified {member.mention} and re-added the Unverified role.", ephemeral=True)
+    else:
+        await interaction.followup.send(f"❌ Failed to unverify {member.mention}. Check bot role hierarchy permissions.", ephemeral=True)
 
 
 @slash_verify.error
-async def slash_verify_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+@slash_unverify.error
+async def verification_permission_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message("❌ You need **Manage Roles** permissions to verify members.", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("You need manage roles perm for this", ephemeral=True)
+        else:
+            await interaction.followup.send("You need manage roles perm for this", ephemeral=True)
 
 
 # =========================================================
@@ -319,7 +361,7 @@ async def on_raw_reaction_add(payload):
 
     # Check if the reaction matches the defined verification emoji ID
     is_valid_emoji = False
-    if payload.emoji.is_custom_emoji():
+    if payload.emoji.is_customemoji():
         if payload.emoji.id == EMOJI_ID:
             is_valid_emoji = True
     elif EMOJI_ID == 0:  # Fallback if using standard emojis
